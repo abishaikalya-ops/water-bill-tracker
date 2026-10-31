@@ -116,3 +116,331 @@
       <div class="summary-card">
         <div class="label">Total Paid</div>
         <div class="val" style="color: var(--success);" id="total-paid">KSh 0</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">Total Bado</div>
+        <div class="val" style="color: var(--danger);" id="total-bado">KSh 0</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">Rates (Water / Trash)</div>
+        <div class="val">
+          KSh <input type="number" id="rate-input" value="250" style="width: 42px; text-align: center; font-size: 0.95rem; font-weight:700;" onchange="renderApp()"> / +100
+        </div>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <button class="filter-btn active" onclick="setBlock('ALL', this)">All</button>
+      <button class="filter-btn" onclick="setBlock('GND', this)">Ground (1-10)</button>
+      <button class="filter-btn" onclick="setBlock('B', this)">Block B</button>
+      <button class="filter-btn" onclick="setBlock('C', this)">Block C</button>
+      <button class="filter-btn" onclick="setBlock('D', this)">Block D</button>
+      <button class="filter-btn" onclick="setBlock('E', this)">Block E</button>
+    </div>
+
+    <div id="houses-container"></div>
+
+    <button class="btn-action btn-primary" onclick="closeAndSaveMonth()">Save & Start New Month</button>
+  </div>
+
+  <!-- HISTORY VIEW -->
+  <div id="view-history" class="container" style="display: none;">
+    <label style="font-size: 0.8rem; font-weight: 700; color: var(--text-muted);">SELECT HOUSE FOR HISTORY:</label>
+    <select id="history-house-select" onchange="renderHistory()"></select>
+
+    <div id="history-container"></div>
+
+    <button class="btn-action btn-outline" onclick="exportCSV()">Export All History (CSV)</button>
+  </div>
+
+  <script>
+    const TRASH_FEE = 100;
+
+    const BLOCKS = {
+      'GND': Array.from({length: 10}, (_, i) => `${i + 1}`),
+      'B': Array.from({length: 10}, (_, i) => `${i + 1}B`),
+      'C': Array.from({length: 10}, (_, i) => `${i + 1}C`),
+      'D': Array.from({length: 10}, (_, i) => `${i + 1}D`),
+      'E': Array.from({length: 10}, (_, i) => `${i + 1}E`),
+    };
+
+    const INITIAL_LEDGER = {
+      '1D': { prev: 39, curr: 40, status: 'Paid' },
+      '2D': { prev: 36, curr: 41, status: 'Paid' },
+      '3D': { prev: 34, curr: 36, status: 'Paid' },
+      '4D': { prev: 38, curr: 42, status: 'Paid' },
+      '5D': { prev: 39, curr: 40, status: 'Paid' },
+      '6D': { prev: 22, curr: 23, status: 'Paid' },
+      '7D': { prev: 23, curr: 25, status: 'Paid' },
+      '8D': { prev: 32, curr: 34, status: 'Paid' },
+      '9D': { prev: 39, curr: 43, status: 'Paid' },
+      '10D': { prev: 0, curr: 0, status: 'Bado' },
+      '1E': { prev: 29, curr: 31, status: 'Paid' },
+      '2E': { prev: 30, curr: 32, status: 'Paid' },
+      '3E': { prev: 36, curr: 37, status: 'Paid' },
+      '4E': { prev: 24, curr: 26, status: 'Paid' },
+      '5E': { prev: 18, curr: 21, status: 'Bado' },
+      '6E': { prev: 33, curr: 35, status: 'Paid' },
+      '7E': { prev: 40, curr: 41, status: 'Paid' },
+      '8E': { prev: 31, curr: 33, status: 'Bado' },
+      '9E': { prev: 36, curr: 38, status: 'Paid' },
+      '10E': { prev: 0, curr: 0, status: 'Bado' }
+    };
+
+    let houses = JSON.parse(localStorage.getItem('water_app_houses')) || {};
+    let historyLogs = JSON.parse(localStorage.getItem('water_app_history')) || [];
+    let activeBlock = 'ALL';
+
+    function initData() {
+      Object.keys(BLOCKS).forEach(b => {
+        BLOCKS[b].forEach(h => {
+          if (!houses[h]) {
+            houses[h] = INITIAL_LEDGER[h] || { prev: 0, curr: 0, status: 'Bado' };
+          }
+        });
+      });
+      saveHouses();
+      populateHistoryDropdown();
+    }
+
+    function saveHouses() { localStorage.setItem('water_app_houses', JSON.stringify(houses)); }
+    function saveHistory() { localStorage.setItem('water_app_history', JSON.stringify(historyLogs)); }
+
+    function switchView(view) {
+      document.getElementById('view-entry').style.display = view === 'entry' ? 'block' : 'none';
+      document.getElementById('view-history').style.display = view === 'history' ? 'block' : 'none';
+      document.querySelectorAll('.nav-tab').forEach((tab, idx) => {
+        tab.classList.toggle('active', (view === 'entry' && idx === 0) || (view === 'history' && idx === 1));
+      });
+      if (view === 'history') renderHistory();
+    }
+
+    function setBlock(block, btn) {
+      activeBlock = block;
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderApp();
+    }
+
+    function updateVal(house, field, val) {
+      houses[house][field] = Number(val) || 0;
+      saveHouses();
+      renderApp();
+    }
+
+    function toggleStatus(house) {
+      houses[house].status = houses[house].status === 'Paid' ? 'Bado' : 'Paid';
+      saveHouses();
+      renderApp();
+    }
+
+    function renderApp() {
+      const container = document.getElementById('houses-container');
+      const rate = Number(document.getElementById('rate-input').value) || 250;
+      container.innerHTML = '';
+
+      let totalBilled = 0, totalPaid = 0, totalBado = 0;
+
+      Object.keys(houses).forEach(h => {
+        const belongsToBlock = activeBlock === 'ALL' || BLOCKS[activeBlock]?.includes(h);
+        const data = houses[h];
+        const consumption = Math.max(0, data.curr - data.prev);
+        const waterAmount = consumption * rate;
+        const totalAmount = waterAmount + TRASH_FEE;
+
+        totalBilled += totalAmount;
+        if (data.status === 'Paid') totalPaid += totalAmount;
+        else totalBado += totalAmount;
+
+        if (!belongsToBlock) return;
+
+        const card = document.createElement('div');
+        card.className = 'house-card';
+        card.innerHTML = `
+          <div class="house-header">
+            <span class="house-title">House ${h}</span>
+            <div class="status-toggle ${data.status.toLowerCase()}" onclick="toggleStatus('${h}')">
+              <span class="paid-tab">Paid</span>
+              <span class="bado-tab">Bado</span>
+            </div>
+          </div>
+          <div class="input-grid">
+            <div class="input-group">
+              <label>PREVIOUS</label>
+              <input type="number" value="${data.prev}" onchange="updateVal('${h}', 'prev', this.value)">
+            </div>
+            <div class="input-group">
+              <label>CURRENT</label>
+              <input type="number" value="${data.curr}" onchange="updateVal('${h}', 'curr', this.value)">
+            </div>
+          </div>
+          <div class="calc-box">
+            <div class="calc-row-detail">
+              <span>Water (${consumption} units × KSh ${rate})</span>
+              <span>KSh ${waterAmount.toLocaleString()}</span>
+            </div>
+            <div class="calc-row-detail">
+              <span>Trash Fee</span>
+              <span>+ KSh ${TRASH_FEE}</span>
+            </div>
+            <div class="calc-row-total">
+              <span>Total Bill</span>
+              <span>KSh ${totalAmount.toLocaleString()}</span>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+
+      document.getElementById('total-billed').innerText = `KSh ${totalBilled.toLocaleString()}`;
+      document.getElementById('total-paid').innerText = `KSh ${totalPaid.toLocaleString()}`;
+      document.getElementById('total-bado').innerText = `KSh ${totalBado.toLocaleString()}`;
+    }
+
+    function closeAndSaveMonth() {
+      if (!confirm("Are you sure you want to save this month to History and start a new month?")) return;
+
+      const monthName = prompt("Enter Month & Year (e.g., October 2026):", new Date().toLocaleString('default', { month: 'long', year: 'numeric' }));
+      if (!monthName) return;
+
+      const rate = Number(document.getElementById('rate-input').value) || 250;
+
+      Object.keys(houses).forEach(h => {
+        const data = houses[h];
+        const consumption = Math.max(0, data.curr - data.prev);
+        const waterAmount = consumption * rate;
+        const totalAmount = waterAmount + TRASH_FEE;
+
+        historyLogs.push({
+          id: Date.now() + Math.random(),
+          month: monthName,
+          house: h,
+          prev: data.prev,
+          curr: data.curr,
+          consumption: consumption,
+          waterAmount: waterAmount,
+          trashFee: TRASH_FEE,
+          amount: totalAmount,
+          status: data.status,
+          dateSaved: new Date().toLocaleDateString()
+        });
+
+        // Rollover: Current reading becomes Previous reading for next month
+        data.prev = data.curr;
+        data.status = 'Bado';
+      });
+
+      saveHistory();
+      saveHouses();
+      renderApp();
+      alert("Month archived successfully to History!");
+    }
+
+    function populateHistoryDropdown() {
+      const select = document.getElementById('history-house-select');
+      select.innerHTML = '';
+      Object.keys(houses).forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.innerText = `House ${h}`;
+        select.appendChild(opt);
+      });
+    }
+
+    function renderHistory() {
+      const selectedHouse = document.getElementById('history-house-select').value;
+      const container = document.getElementById('history-container');
+      container.innerHTML = '';
+
+      const houseRecords = historyLogs.filter(log => log.house === selectedHouse);
+
+      if (houseRecords.length === 0) {
+        container.innerHTML = `<p style="text-align: center; color: var(--text-muted); padding: 20px;">No historical records saved for House ${selectedHouse} yet.</p>`;
+        return;
+      }
+
+      houseRecords.slice().reverse().forEach(record => {
+        const card = document.createElement('div');
+        card.className = 'history-card';
+        card.innerHTML = `
+          <div class="history-header">
+            <span>${record.month}</span>
+            <span style="color: ${record.status === 'Paid' ? 'var(--success)' : 'var(--danger)'}">${record.status}</span>
+          </div>
+          <div class="history-body">
+            <div>Readings: ${record.prev} → ${record.curr} (${record.consumption} units)</div>
+            <div>Water: KSh ${(record.waterAmount || (record.amount - 100)).toLocaleString()} | Trash: KSh ${record.trashFee || 100}</div>
+            <div style="font-weight:700; margin-top:2px;">Total: KSh ${record.amount.toLocaleString()}</div>
+          </div>
+          <div class="history-actions">
+            <button class="btn-sm btn-edit" onclick="editHistoryItem(${record.id})">Edit</button>
+            <button class="btn-sm btn-delete" onclick="deleteHistoryItem(${record.id})">Delete</button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function editHistoryItem(id) {
+      const item = historyLogs.find(r => r.id === id);
+      if (!item) return;
+
+      const newPrev = prompt(`House ${item.house} - Previous Reading:`, item.prev);
+      if (newPrev === null) return;
+
+      const newCurr = prompt(`House ${item.house} - Current Reading:`, item.curr);
+      if (newCurr === null) return;
+
+      const newStatus = prompt(`Status (Paid / Bado):`, item.status);
+      if (newStatus === null) return;
+
+      const rate = Number(document.getElementById('rate-input').value) || 250;
+      const prevNum = Number(newPrev) || 0;
+      const currNum = Number(newCurr) || 0;
+      const consumption = Math.max(0, currNum - prevNum);
+      const waterAmount = consumption * rate;
+
+      item.prev = prevNum;
+      item.curr = currNum;
+      item.consumption = consumption;
+      item.waterAmount = waterAmount;
+      item.trashFee = TRASH_FEE;
+      item.amount = waterAmount + TRASH_FEE;
+      item.status = newStatus.trim().toLowerCase() === 'paid' ? 'Paid' : 'Bado';
+
+      saveHistory();
+      renderHistory();
+      alert("Record updated!");
+    }
+
+    function deleteHistoryItem(id) {
+      if (!confirm("Are you sure you want to delete this historical record?")) return;
+
+      historyLogs = historyLogs.filter(r => r.id !== id);
+      saveHistory();
+      renderHistory();
+    }
+
+    function exportCSV() {
+      if (historyLogs.length === 0) {
+        alert("No history available to export yet.");
+        return;
+      }
+      let csv = "Month,House,Previous,Current,Consumption,WaterAmount,TrashFee,TotalAmount,Status\n";
+      historyLogs.forEach(r => {
+        csv += `"${r.month}","${r.house}",${r.prev},${r.curr},${r.consumption},${r.waterAmount || (r.amount-100)},${r.trashFee || 100},${r.amount},"${r.status}"\n`;
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Water_Trash_Billing_History.csv`;
+      a.click();
+    }
+
+    initData();
+    renderApp();
+  </script>
+</body>
+</html>
